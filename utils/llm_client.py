@@ -1,6 +1,6 @@
 import json
 import logging
-from huggingface_hub import InferenceClient
+import requests
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -16,6 +16,7 @@ HF_MODELS = [
 def _get_hf_response(system_instruction: str, prompt: str, api_key: str) -> str:
     """
     Helper function to query Hugging Face Inference API with automatic fallback.
+    Uses direct HTTP requests to bypass strict router requirements.
     """
     if not api_key:
         return "Error: Hugging Face API token is missing."
@@ -25,23 +26,32 @@ def _get_hf_response(system_instruction: str, prompt: str, api_key: str) -> str:
     for model_name in HF_MODELS:
         try:
             logger.info(f"Attempting inference with model: {model_name}")
-            client = InferenceClient(model=model_name, token=api_key)
+            api_url = f"https://api-inference.huggingface.co/models/{model_name}/v1/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json"
+            }
             
-            # Format using messages
-            messages = [
-                {"role": "system", "content": system_instruction},
-                {"role": "user", "content": prompt}
-            ]
+            payload = {
+                "model": model_name,
+                "messages": [
+                    {"role": "system", "content": system_instruction},
+                    {"role": "user", "content": prompt}
+                ],
+                "max_tokens": 1024,
+                "temperature": 0.7
+            }
             
-            # Call inference client
-            response = client.chat_completion(
-                messages=messages,
-                max_tokens=1024,
-                temperature=0.7
-            )
+            response = requests.post(api_url, headers=headers, json=payload, timeout=30)
             
-            # Extract content
-            return response.choices[0].message.content
+            if response.status_code == 200:
+                return response.json()["choices"][0]["message"]["content"]
+            else:
+                error_msg = response.text
+                logger.warning(f"Model {model_name} failed: HTTP {response.status_code} - {error_msg}")
+                errors.append(f"{model_name}: HTTP {response.status_code}")
+                continue
+                
         except Exception as e:
             logger.warning(f"Model {model_name} failed: {e}")
             errors.append(f"{model_name}: {str(e)}")
