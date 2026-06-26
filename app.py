@@ -200,35 +200,17 @@ st.sidebar.markdown("---")
 
 # API Key Config
 st.sidebar.subheader("🔑 API Configuration")
-provider = st.sidebar.selectbox("LLM Provider", ["Google Gemini", "xAI Grok", "Local Ollama"])
 
-if provider == "Google Gemini":
-    api_key = st.sidebar.text_input(
-        "Gemini API Key",
-        value=os.getenv("GOOGLE_API_KEY", "") or os.getenv("GEMINI_API_KEY", ""),
-        type="password",
-        help="Insert your Google Gemini API Key. Get it from Google AI Studio (Free Tier available)."
-    )
-    model_name = st.sidebar.selectbox("Model", ["gemini-1.5-flash", "gemini-1.5-pro"])
-elif provider == "xAI Grok":
-    api_key = st.sidebar.text_input(
-        "Grok API Key",
-        value=os.getenv("XAI_API_KEY", ""),
-        type="password",
-        help="Insert your Grok (xAI) API Key. Get it from xAI console (Requires account credits)."
-    )
-    model_name = st.sidebar.selectbox("Model", ["grok-2-1212", "grok-2-latest", "grok-beta"])
-else:  # Local Ollama
-    api_key = "local"  # Dummy value to satisfy validation checks
-    model_name = st.sidebar.text_input(
-        "Ollama Model Name",
-        value="llama3",
-        help="Type the name of your local Ollama model (e.g. llama3, mistral, gemma, phi3)."
-    )
-    st.sidebar.info("💡 Ollama runs locally. Make sure the Ollama application is active on your machine.")
+# Try reading from Streamlit Secrets first (for deployment), fallback to local .env
+try:
+    api_key = st.secrets.get("HF_TOKEN", os.getenv("HF_TOKEN", ""))
+except Exception:
+    api_key = os.getenv("HF_TOKEN", "")
 
-if provider != "Local Ollama" and not api_key:
-    st.sidebar.warning("⚠️ API Key is missing. Some features will be disabled.")
+if not api_key:
+    st.sidebar.warning("⚠️ HF_TOKEN is missing. Please add it to your .env or st.secrets. Generation features are disabled.")
+else:
+    st.sidebar.success("✅ Hugging Face API connected.")
 
 st.sidebar.markdown("---")
 
@@ -364,7 +346,7 @@ if choice == "💬 Placement Chatbot":
         # Retrieval and response generation
         with st.chat_message("assistant"):
             if not api_key:
-                st.error(f"Please supply a valid API Key for {provider} in the sidebar to generate answers.")
+                st.error("Please supply a valid Hugging Face API Key (.env or st.secrets) to generate answers.")
             else:
                 with st.spinner("Searching document context and drafting response..."):
                     # Check if vector store is loaded
@@ -382,9 +364,11 @@ if choice == "💬 Placement Chatbot":
                     else:
                         st.info("ℹ️ No documents indexed. Bot will reply from general historical knowledge.")
 
-                    # Generate RAG output
-                    answer = generate_rag_answer(user_query, retrieved_docs, api_key, provider=provider, model_name=model_name)
-                    st.markdown(answer)
+                    answer = generate_rag_answer(user_query, retrieved_docs, api_key)
+                    if answer.startswith("Error:"):
+                        st.error(answer)
+                    else:
+                        st.markdown(answer)
                     
                     # Display Sources
                     if sources_data:
@@ -416,7 +400,7 @@ elif choice == "📄 Resume Analyzer":
     if resume_file:
         if st.button("🚀 Analyze Resume", use_container_width=True):
             if not api_key:
-                st.error(f"Provide a valid API Key for {provider} in the sidebar first!")
+                st.error("Provide a valid Hugging Face API Key first!")
             else:
                 with st.spinner("Analyzing resume content... This may take a few seconds."):
                     try:
@@ -425,7 +409,11 @@ elif choice == "📄 Resume Analyzer":
                         resume_text = "\n".join([doc.page_content for doc in docs])
                         
                         if resume_text.strip():
-                            st.session_state.resume_analysis = analyze_resume(resume_text, api_key, provider=provider, model_name=model_name)
+                            analysis_result = analyze_resume(resume_text, api_key)
+                            if analysis_result.startswith("Error:"):
+                                st.error(analysis_result)
+                            else:
+                                st.session_state.resume_analysis = analysis_result
                         else:
                             st.error("Empty resume file text extracted.")
                     except Exception as e:
@@ -457,7 +445,7 @@ elif choice == "🏢 Company Prep Mode":
             if not company_name:
                 st.error("Please enter a company name.")
             elif not api_key:
-                st.error(f"Please insert a valid API Key for {provider} in the sidebar.")
+                st.error("Please insert a valid Hugging Face API Key.")
             else:
                 with st.spinner(f"Compiling preparation strategy for {company_name}..."):
                     try:
@@ -468,7 +456,11 @@ elif choice == "🏢 Company Prep Mode":
                                 all_comp_docs.extend(extract_documents_from_pdf(f))
                             company_docs_text = "\n".join([d.page_content for d in all_comp_docs])
                         
-                        st.session_state.company_analysis = generate_company_prep(company_name, company_docs_text, api_key, provider=provider, model_name=model_name)
+                        analysis_result = generate_company_prep(company_name, company_docs_text, api_key)
+                        if analysis_result.startswith("Error:"):
+                            st.error(analysis_result)
+                        else:
+                            st.session_state.company_analysis = analysis_result
                     except Exception as e:
                         st.error(f"Error compiling company materials: {e}")
                         
@@ -500,7 +492,7 @@ elif choice == "✏️ Aptitude Practice":
         
     if st.button("🎯 Generate Custom Quiz", use_container_width=True):
         if not api_key:
-            st.error(f"Please insert a valid API key for {provider} in the sidebar.")
+            st.error("Please insert a valid Hugging Face API key.")
         else:
             with st.spinner("Generating custom MCQ questions from documents..."):
                 retrieved_context = []
@@ -508,7 +500,7 @@ elif choice == "✏️ Aptitude Practice":
                     # Query the vector store for context on the selected topic to base questions on documents
                     retrieved_context = retrieve_relevant_documents(topic, st.session_state.vector_store, k=5)
                 
-                quiz_data = generate_aptitude_quiz(topic, retrieved_context, num_questions, api_key, provider=provider, model_name=model_name)
+                quiz_data = generate_aptitude_quiz(topic, retrieved_context, num_questions, api_key)
                 
                 # Store in session state
                 st.session_state.aptitude_quiz = quiz_data

@@ -1,10 +1,57 @@
 import json
-import google.generativeai as genai
-from openai import OpenAI
+import logging
+from huggingface_hub import InferenceClient
 
-def generate_rag_answer(query, retrieved_docs, api_key, provider="Google Gemini", model_name="gemini-1.5-flash"):
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# List of models to try in order (primary followed by fallbacks)
+HF_MODELS = [
+    "meta-llama/Llama-3.2-3B-Instruct",
+    "google/gemma-2-2b-it",
+    "microsoft/Phi-3-mini-4k-instruct",
+    "Qwen/Qwen2.5-3B-Instruct"
+]
+
+def _get_hf_response(system_instruction: str, prompt: str, api_key: str) -> str:
     """
-    Generates a RAG response from Google Gemini, xAI Grok, or Local Ollama.
+    Helper function to query Hugging Face Inference API with automatic fallback.
+    """
+    if not api_key:
+        return "Error: Hugging Face API token is missing."
+        
+    errors = []
+
+    for model_name in HF_MODELS:
+        try:
+            logger.info(f"Attempting inference with model: {model_name}")
+            client = InferenceClient(model=model_name, token=api_key)
+            
+            # Format using messages
+            messages = [
+                {"role": "system", "content": system_instruction},
+                {"role": "user", "content": prompt}
+            ]
+            
+            # Call inference client
+            response = client.chat_completion(
+                messages=messages,
+                max_tokens=1024,
+                temperature=0.7
+            )
+            
+            # Extract content
+            return response.choices[0].message.content
+        except Exception as e:
+            logger.warning(f"Model {model_name} failed: {e}")
+            errors.append(f"{model_name}: {str(e)}")
+            continue
+            
+    return "Error: All Hugging Face fallback models failed. Details: " + " | ".join(errors)
+
+def generate_rag_answer(query, retrieved_docs, api_key, **kwargs):
+    """
+    Generates a RAG response from Hugging Face Inference API.
     """
     context_str = ""
     for idx, doc in enumerate(retrieved_docs):
@@ -21,57 +68,22 @@ def generate_rag_answer(query, retrieved_docs, api_key, provider="Google Gemini"
         "Keep your answers structured, professional, and easy to read. Use code snippets in Java/Python where applicable.\n"
         "Use formatting like bullet points, bold text, and numbered lists."
     )
-    
+
     prompt = f"User Query: {query}\n\nRetrieved Context Documents:\n{context_str}\n\nAnswer:"
     
-    if provider == "Google Gemini":
-        try:
-            genai.configure(api_key=api_key)
-            model = genai.GenerativeModel(
-                model_name=model_name,
-                system_instruction=system_instruction
-            )
-            response = model.generate_content(prompt)
-            return response.text
-        except Exception as e:
-            return f"Error communicating with Gemini API: {str(e)}"
-    elif provider == "xAI Grok":
-        try:
-            client = OpenAI(api_key=api_key, base_url="https://api.x.ai/v1")
-            completion = client.chat.completions.create(
-                model=model_name,
-                messages=[
-                    {"role": "system", "content": system_instruction},
-                    {"role": "user", "content": prompt}
-                ]
-            )
-            return completion.choices[0].message.content
-        except Exception as e:
-            return f"Error communicating with Grok API: {str(e)}"
-    elif provider == "Local Ollama":
-        try:
-            import ollama
-            response = ollama.chat(
-                model=model_name,
-                messages=[
-                    {"role": "system", "content": system_instruction},
-                    {"role": "user", "content": prompt}
-                ]
-            )
-            return response['message']['content']
-        except Exception as e:
-            return f"Error communicating with local Ollama: {str(e)}. Make sure Ollama server is running (run 'ollama run {model_name}')."
+    return _get_hf_response(system_instruction, prompt, api_key)
 
-def analyze_resume(resume_text, api_key, provider="Google Gemini", model_name="gemini-1.5-flash"):
+
+def analyze_resume(resume_text, api_key, **kwargs):
     """
-    Analyzes the resume text using Gemini, Grok, or local Ollama.
+    Analyzes the resume text using Hugging Face Inference API.
     """
     system_instruction = (
         "You are an expert HR Manager and Technical Recruiter.\n"
         "Analyze the student's resume. Identify their core skills, projects, and educational background.\n"
         "Provide a comprehensive, professional evaluation of the profile."
     )
-    
+
     prompt = f"""
     Please analyze the following resume text:
     ---
@@ -98,46 +110,11 @@ def analyze_resume(resume_text, api_key, provider="Google Gemini", model_name="g
     - 2 Behavioral/HR Questions (related to teamwork, challenges, leadership)
     For each question, provide a detailed but concise model answer that the student can study.
     """
-    
-    if provider == "Google Gemini":
-        try:
-            genai.configure(api_key=api_key)
-            model = genai.GenerativeModel(
-                model_name=model_name,
-                system_instruction=system_instruction
-            )
-            response = model.generate_content(prompt)
-            return response.text
-        except Exception as e:
-            return f"Error communicating with Gemini API: {str(e)}"
-    elif provider == "xAI Grok":
-        try:
-            client = OpenAI(api_key=api_key, base_url="https://api.x.ai/v1")
-            completion = client.chat.completions.create(
-                model=model_name,
-                messages=[
-                    {"role": "system", "content": system_instruction},
-                    {"role": "user", "content": prompt}
-                ]
-            )
-            return completion.choices[0].message.content
-        except Exception as e:
-            return f"Error communicating with Grok API: {str(e)}"
-    elif provider == "Local Ollama":
-        try:
-            import ollama
-            response = ollama.chat(
-                model=model_name,
-                messages=[
-                    {"role": "system", "content": system_instruction},
-                    {"role": "user", "content": prompt}
-                ]
-            )
-            return response['message']['content']
-        except Exception as e:
-            return f"Error communicating with local Ollama: {str(e)}. Make sure Ollama server is running (run 'ollama run {model_name}')."
 
-def generate_company_prep(company_name, company_docs_text, api_key, provider="Google Gemini", model_name="gemini-1.5-flash"):
+    return _get_hf_response(system_instruction, prompt, api_key)
+
+
+def generate_company_prep(company_name, company_docs_text, api_key, **kwargs):
     """
     Generates company preparation checklist.
     """
@@ -145,9 +122,9 @@ def generate_company_prep(company_name, company_docs_text, api_key, provider="Go
         "You are a Senior Placement Mentor. Your job is to analyze company preparation materials "
         "and suggest how a candidate can prepare specifically to clear that company's hiring process."
     )
-    
+
     docs_context = f"\nCompany Specific Resources:\n{company_docs_text}\n" if company_docs_text else "\nNo specific files uploaded. Using general historical data for this company.\n"
-    
+
     prompt = f"""
     Target Company: {company_name}
     {docs_context}
@@ -166,46 +143,11 @@ def generate_company_prep(company_name, company_docs_text, api_key, provider="Go
     ### 4. Assessment Strategy & Pro-Tips
     Actionable tips to clear the online rounds and make a lasting impression in face-to-face interviews.
     """
-    
-    if provider == "Google Gemini":
-        try:
-            genai.configure(api_key=api_key)
-            model = genai.GenerativeModel(
-                model_name=model_name,
-                system_instruction=system_instruction
-            )
-            response = model.generate_content(prompt)
-            return response.text
-        except Exception as e:
-            return f"Error communicating with Gemini API: {str(e)}"
-    elif provider == "xAI Grok":
-        try:
-            client = OpenAI(api_key=api_key, base_url="https://api.x.ai/v1")
-            completion = client.chat.completions.create(
-                model=model_name,
-                messages=[
-                    {"role": "system", "content": system_instruction},
-                    {"role": "user", "content": prompt}
-                ]
-            )
-            return completion.choices[0].message.content
-        except Exception as e:
-            return f"Error communicating with Grok API: {str(e)}"
-    elif provider == "Local Ollama":
-        try:
-            import ollama
-            response = ollama.chat(
-                model=model_name,
-                messages=[
-                    {"role": "system", "content": system_instruction},
-                    {"role": "user", "content": prompt}
-                ]
-            )
-            return response['message']['content']
-        except Exception as e:
-            return f"Error communicating with local Ollama: {str(e)}. Make sure Ollama server is running (run 'ollama run {model_name}')."
 
-def generate_aptitude_quiz(topic, context_docs, num_questions, api_key, provider="Google Gemini", model_name="gemini-1.5-flash"):
+    return _get_hf_response(system_instruction, prompt, api_key)
+
+
+def generate_aptitude_quiz(topic, context_docs, num_questions, api_key, **kwargs):
     """
     Generates a structured MCQ aptitude quiz.
     """
@@ -215,11 +157,11 @@ def generate_aptitude_quiz(topic, context_docs, num_questions, api_key, provider
         "You MUST output raw JSON matching the specified structure, without any additional text. "
         "Format the output strictly as a JSON array of objects."
     )
-    
+
     context_str = ""
     for idx, doc in enumerate(context_docs):
         context_str += f"\n--- Context Fragment {idx+1} ---\n{doc.page_content}\n"
-        
+
     prompt = f"""
     Generate an aptitude quiz with {num_questions} questions on the topic: '{topic}'.
     Make sure the questions are representative of placement examinations.
@@ -237,106 +179,41 @@ def generate_aptitude_quiz(topic, context_docs, num_questions, api_key, provider
     
     Output ONLY valid JSON. Start with [ and end with ]. Do not wrap it in any HTML tags or markdown formatting other than optionally ```json.
     """
-    
-    if provider == "Google Gemini":
-        try:
-            genai.configure(api_key=api_key)
-            model = genai.GenerativeModel(
-                model_name=model_name,
-                system_instruction=system_instruction
-            )
-            response = model.generate_content(prompt)
-            
-            # Parse the JSON response
-            text = response.text.strip()
-            
-            # Remove markdown wrappers
-            if text.startswith("```json"):
-                text = text[7:]
-            if text.endswith("```"):
-                text = text[:-3]
-            text = text.strip()
-            
-            start_idx = text.find("[")
-            end_idx = text.rfind("]")
-            if start_idx != -1 and end_idx != -1:
-                text = text[start_idx:end_idx+1]
-                
-            quiz_data = json.loads(text)
-            return quiz_data
-        except Exception as e:
-            print(f"Error parsing Gemini aptitude quiz JSON: {e}")
-            
-    elif provider == "xAI Grok":
-        try:
-            client = OpenAI(api_key=api_key, base_url="https://api.x.ai/v1")
-            completion = client.chat.completions.create(
-                model=model_name,
-                messages=[
-                    {"role": "system", "content": system_instruction},
-                    {"role": "user", "content": prompt}
-                ]
-            )
-            
-            text = completion.choices[0].message.content.strip()
-            
-            # Remove markdown wrappers
-            if text.startswith("```json"):
-                text = text[7:]
-            if text.endswith("```"):
-                text = text[:-3]
-            text = text.strip()
-            
-            start_idx = text.find("[")
-            end_idx = text.rfind("]")
-            if start_idx != -1 and end_idx != -1:
-                text = text[start_idx:end_idx+1]
-                
-            quiz_data = json.loads(text)
-            return quiz_data
-        except Exception as e:
-            print(f"Error parsing Grok aptitude quiz JSON: {e}")
-            
-    elif provider == "Local Ollama":
-        try:
-            import ollama
-            response = ollama.chat(
-                model=model_name,
-                format="json", # Instruct Ollama to output valid JSON
-                messages=[
-                    {"role": "system", "content": system_instruction},
-                    {"role": "user", "content": prompt}
-                ]
-            )
-            text = response['message']['content'].strip()
-            quiz_data = json.loads(text)
-            return quiz_data
-        except Exception as e:
-            print(f"Error generating quiz via local Ollama: {e}")
 
+    def _parse_json(text: str):
+        text = text.strip()
+        if text.startswith("```json"):
+            text = text[7:]
+        if text.endswith("```"):
+            text = text[:-3]
+        text = text.strip()
+        start_idx = text.find("[")
+        end_idx = text.rfind("]")
+        if start_idx != -1 and end_idx != -1:
+            text = text[start_idx:end_idx + 1]
+        return json.loads(text)
+
+    response_text = _get_hf_response(system_instruction, prompt, api_key)
+    
+    try:
+        if not response_text.startswith("Error"):
+            return _parse_json(response_text)
+    except Exception as e:
+        logger.error(f"Failed to parse JSON response: {e}")
+        
     # Fallback data if API or parsing fails
     return [
         {
             "id": 1,
-            "question": f"A train 100 meters long is running at the speed of 30 km/hr. Find the time taken by it to pass a man standing near the railway line.",
-            "options": [
-                "12 seconds",
-                "15 seconds",
-                "10 seconds",
-                "18 seconds"
-            ],
+            "question": "A train 100 meters long is running at the speed of 30 km/hr. Find the time taken by it to pass a man standing near the railway line.",
+            "options": ["12 seconds", "15 seconds", "10 seconds", "18 seconds"],
             "answer": "12 seconds",
             "explanation": "Speed = 30 km/hr = 30 * (5/18) m/s = 25/3 m/s.\nDistance = 100 meters.\nTime taken = Distance / Speed = 100 / (25/3) = 100 * 3 / 25 = 12 seconds."
         },
         {
             "id": 2,
             "question": "A worker is paid $150 for 5 days of work. How much will he be paid if he works for 20 days at the same rate?",
-            "options": [
-                "$400",
-                "$600",
-                "$500",
-                "$800"
-            ],
+            "options": ["$400", "$600", "$500", "$800"],
             "answer": "$600",
             "explanation": "Daily wage = $150 / 5 = $30 per day.\nWage for 20 days = $30 * 20 = $600."
         }
